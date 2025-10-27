@@ -693,3 +693,4 @@ def run_inference(
 
     latents, scheduler_state = scheduler.step(scheduler_state, noise_pred, t, latents).to_tuple()
   return latents
+  

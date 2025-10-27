@@ -648,49 +648,27 @@ class WanPipeline:
     return video
 
 
-@partial(jax.jit, static_argnames=("guidance_scale_low", "guidance_scale_high", "boundary", "do_classifier_free_guidance"))
+@partial(jax.jit, static_argnames=("do_classifier_free_guidance", "guidance_scale"))
 def transformer_forward_pass(
-    low_noise_graphdef,
-    low_noise_state,
-    low_noise_rest,
-    high_noise_graphdef,
-    high_noise_state,
-    high_noise_rest,
-    latents, timestep,
+    graphdef,
+    sharded_state,
+    rest_of_state,
+    latents,
+    timestep,
     prompt_embeds,
-    guidance_scale_low: float,
-    guidance_scale_high: float,
-    boundary: int,
-    do_classifier_free_guidance: bool,
-    t: jnp.array,
+    do_classifier_free_guidance,
+    guidance_scale,
 ):
-    low_noise_transformer = nnx.merge(low_noise_graphdef, low_noise_state, low_noise_rest)
-    high_noise_transformer = nnx.merge(high_noise_graphdef, high_noise_state, high_noise_rest)
-    noise_pred_low = low_noise_transformer(hidden_states=latents, timestep=timestep, encoder_hidden_states=prompt_embeds)
-    noise_pred_high = high_noise_transformer(hidden_states=latents, timestep=timestep, encoder_hidden_states=prompt_embeds)
+  wan_transformer = nnx.merge(graphdef, sharded_state, rest_of_state)
+  noise_pred = wan_transformer(hidden_states=latents, timestep=timestep, encoder_hidden_states=prompt_embeds)
+  if do_classifier_free_guidance:
+    bsz = latents.shape[0] // 2
+    noise_uncond = noise_pred[bsz:]
+    noise_pred = noise_pred[:bsz]
+    noise_pred = noise_uncond + guidance_scale * (noise_pred - noise_uncond)
+    latents = latents[:bsz]
 
-    use_high_noise = jnp.greater_equal(t, boundary)
-
-    noise_pred = jax.lax.cond(
-        use_high_noise,
-        lambda: noise_pred_high,
-        lambda: noise_pred_low,
-    )
-     
-    current_guide_scale = jax.lax.cond(
-    use_high_noise,
-    lambda: guidance_scale_high,
-    lambda: guidance_scale_low,
-    )
-
-    if do_classifier_free_guidance:
-        bsz = latents.shape[0] // 2
-        noise_uncond = noise_pred[bsz:]
-        noise_pred = noise_pred[:bsz]
-        noise_pred = noise_uncond + current_guide_scale * (noise_pred - noise_uncond)
-        latents = latents[:bsz]
-
-    return noise_pred, latents
+  return noise_pred, latents
 
 def run_inference(
     low_noise_graphdef,
@@ -712,26 +690,35 @@ def run_inference(
   do_classifier_free_guidance = guidance_scale_low > 1.0 or guidance_scale_high > 1.0
   if do_classifier_free_guidance:
     prompt_embeds = jnp.concatenate([prompt_embeds, negative_prompt_embeds], axis=0)
+
+  def low_noise_branch(operands):
+    latents, timestep, prompt_embeds = operands
+    return transformer_forward_pass(
+        low_noise_graphdef, low_noise_state, low_noise_rest,
+        latents, timestep, prompt_embeds,
+        do_classifier_free_guidance, guidance_scale_low
+    )
+
+  def high_noise_branch(operands):
+    latents, timestep, prompt_embeds = operands
+    return transformer_forward_pass(
+        high_noise_graphdef, high_noise_state, high_noise_rest,
+        latents, timestep, prompt_embeds,
+        do_classifier_free_guidance, guidance_scale_high
+    )
+
   for step in range(num_inference_steps):
     t = jnp.array(scheduler_state.timesteps, dtype=jnp.int32)[step]
     if do_classifier_free_guidance:
       latents = jnp.concatenate([latents] * 2)
     timestep = jnp.broadcast_to(t, latents.shape[0])
+    use_high_noise = jnp.greater_equal(t, boundary)
 
-    noise_pred, latents = transformer_forward_pass(
-        low_noise_graphdef,
-        low_noise_state,
-        low_noise_rest,
-        high_noise_graphdef,
-        high_noise_state,
-        high_noise_rest,
-        latents, timestep,
-        prompt_embeds,
-        guidance_scale_low,
-        guidance_scale_high,
-        boundary,
-        do_classifier_free_guidance,
-        t
+    noise_pred, latents = jax.lax.cond(
+        use_high_noise,
+        high_noise_branch,
+        low_noise_branch,
+        (latents, timestep, prompt_embeds)
     )
 
     latents, scheduler_state = scheduler.step(scheduler_state, noise_pred, t, latents).to_tuple()

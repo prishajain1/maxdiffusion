@@ -188,3 +188,4 @@ def save_checkpoint_orig(self, train_step, pipeline: WanPipeline, train_states: 
   # Save the checkpoint
   self.checkpoint_manager.save(train_step, args=save_args)
   max_logging.log(f"Checkpoint for step {train_step} saved.")
+  
