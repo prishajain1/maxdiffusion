@@ -34,6 +34,7 @@ class WanCheckpointer(ABC):
   def __init__(self, config, checkpoint_type):
     self.config = config
     self.checkpoint_type = checkpoint_type
+    self.opt_state = None
 
     self.checkpoint_manager: ocp.CheckpointManager = create_orbax_checkpoint_manager(
         self.config.checkpoint_dir,
@@ -59,48 +60,41 @@ class WanCheckpointer(ABC):
         return None, None
     max_logging.log(f"Loading WAN checkpoint from step {step}")
     metadatas = self.checkpoint_manager.item_metadata(step)
-
-    restore_args = {}
-
-    low_state_metadata = metadatas.low_noise_transformer_state
-    abstract_tree_structure_low_state = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, low_state_metadata)
-    low_state_restore = ocp.args.PyTreeRestore(
+    
+    low_noise_transformer_metadata = metadatas.low_noise_transformer_state
+    abstract_tree_structure_low_params = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, low_noise_transformer_metadata)
+    low_params_restore = ocp.args.PyTreeRestore(
         restore_args=jax.tree.map(
             lambda _: ocp.RestoreArgs(restore_type=np.ndarray),
-            abstract_tree_structure_low_state,
+            abstract_tree_structure_low_params,
         )
     )
-    restore_args["low_noise_transformer_state"] = low_state_restore
-
-    high_state_metadata = metadatas.high_noise_transformer_state
-    abstract_tree_structure_high_state = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, high_state_metadata)
-    high_state_restore = ocp.args.PyTreeRestore(
+    
+    high_noise_transformer_metadata = metadatas.high_noise_transformer_state
+    abstract_tree_structure_high_params = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, high_noise_transformer_metadata)
+    high_params_restore = ocp.args.PyTreeRestore(
         restore_args=jax.tree.map(
             lambda _: ocp.RestoreArgs(restore_type=np.ndarray),
-            abstract_tree_structure_high_state,
+            abstract_tree_structure_high_params,
         )
     )
-    restore_args["high_noise_transformer_state"] = high_state_restore
 
-    op_state_metadata = metadatas.optimizer_state
-    abstract_tree_structure_op_state = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, op_state_metadata)
-    op_state_restore = ocp.args.PyTreeRestore(
-        restore_args=jax.tree.map(
-            lambda _: ocp.RestoreArgs(restore_type=np.ndarray),
-            abstract_tree_structure_op_state,
-        )
-    )
-    restore_args["optimizer_state"] = op_state_restore
-
-    restore_args["wan_config"] = ocp.args.JsonRestore()
-
-    max_logging.log("Restoring WAN 2.2 checkpoint")
+    max_logging.log("Restoring WAN checkpoint")
     restored_checkpoint = self.checkpoint_manager.restore(
         directory=epath.Path(self.config.checkpoint_dir),
         step=step,
-        args=ocp.args.Composite(**restore_args),
+        args=ocp.args.Composite(
+            low_noise_transformer_state=low_params_restore,
+            high_noise_transformer_state=high_params_restore,
+            wan_config=ocp.args.JsonRestore(),
+        ),
     )
     max_logging.log(f"restored checkpoint {restored_checkpoint.keys()}")
+    max_logging.log(f"restored checkpoint low_noise_transformer_state {restored_checkpoint.low_noise_transformer_state.keys()}")
+    max_logging.log(f"restored checkpoint high_noise_transformer_state {restored_checkpoint.high_noise_transformer_state.keys()}")
+    max_logging.log(f"optimizer found in low_noise checkpoint {'opt_state' in restored_checkpoint.low_noise_transformer_state.keys()}")
+    max_logging.log(f"optimizer found in high_noise checkpoint {'opt_state' in restored_checkpoint.high_noise_transformer_state.keys()}")
+    max_logging.log(f"optimizer state saved in attribute self.opt_state {self.opt_state}")
     return restored_checkpoint, step
 
   def load_diffusers_checkpoint(self):
@@ -113,7 +107,11 @@ class WanCheckpointer(ABC):
     if restored_checkpoint:
       max_logging.log("Loading WAN pipeline from checkpoint")
       pipeline = WanPipeline.from_checkpoint(self.config, restored_checkpoint)
-      opt_state = restored_checkpoint.get("optimizer_state")
+      # Check for optimizer state in either transformer
+      if "opt_state" in restored_checkpoint.low_noise_transformer_state.keys():
+        opt_state = restored_checkpoint.low_noise_transformer_state["opt_state"]
+      elif "opt_state" in restored_checkpoint.high_noise_transformer_state.keys():
+        opt_state = restored_checkpoint.high_noise_transformer_state["opt_state"]
     else:
       max_logging.log("No checkpoint found, loading default pipeline.")
       pipeline = self.load_diffusers_checkpoint()
@@ -131,21 +129,12 @@ class WanCheckpointer(ABC):
         "wan_config": ocp.args.JsonSave(config_to_json(pipeline.low_noise_transformer)),
     }
 
-    if "low_noise_transformer" in train_states:
-        low_noise_state = train_states["low_noise_transformer"]
-        items["low_noise_transformer_state"] = ocp.args.PyTreeSave(low_noise_state)
-
-    if "high_noise_transformer" in train_states:
-        high_noise_state = train_states["high_noise_transformer"]
-        items["high_noise_transformer_state"] = ocp.args.PyTreeSave(high_noise_state)
-
-    if "opt_state" in train_states:
-        items["optimizer_state"] = ocp.args.PyTreeSave(train_states["opt_state"])
+    items["low_noise_transformer_state"] = ocp.args.PyTreeSave(train_states["low_noise_transformer"])
+    items["high_noise_transformer_state"] = ocp.args.PyTreeSave(train_states["high_noise_transformer"])
 
     # Save the checkpoint
-    if len(items) > 1:
-        self.checkpoint_manager.save(train_step, args=ocp.args.Composite(**items))
-        max_logging.log(f"Checkpoint for step {train_step} saved.")
+    self.checkpoint_manager.save(train_step, args=ocp.args.Composite(**items))
+    max_logging.log(f"Checkpoint for step {train_step} saved.")
 
 
 def save_checkpoint_orig(self, train_step, pipeline: WanPipeline, train_states: dict):
