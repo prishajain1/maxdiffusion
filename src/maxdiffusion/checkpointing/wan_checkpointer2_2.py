@@ -34,7 +34,6 @@ class WanCheckpointer(ABC):
   def __init__(self, config, checkpoint_type):
     self.config = config
     self.checkpoint_type = checkpoint_type
-    self.opt_state = None
 
     self.checkpoint_manager: ocp.CheckpointManager = create_orbax_checkpoint_manager(
         self.config.checkpoint_dir,
@@ -83,17 +82,25 @@ class WanCheckpointer(ABC):
     )
     restore_args["high_noise_transformer_state"] = high_state_restore
 
+    op_state_metadata = metadatas.optimizer_state
+    abstract_tree_structure_op_state = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, op_state_metadata)
+    op_state_restore = ocp.args.PyTreeRestore(
+        restore_args=jax.tree.map(
+            lambda _: ocp.RestoreArgs(restore_type=np.ndarray),
+            abstract_tree_structure_op_state,
+        )
+    )
+    restore_args["optimizer_state"] = op_state_restore
+
     restore_args["wan_config"] = ocp.args.JsonRestore()
 
     max_logging.log("Restoring WAN 2.2 checkpoint")
     restored_checkpoint = self.checkpoint_manager.restore(
+        directory=epath.Path(self.config.checkpoint_dir),
         step=step,
         args=ocp.args.Composite(**restore_args),
     )
     max_logging.log(f"restored checkpoint {restored_checkpoint.keys()}")
-    max_logging.log(f"restored checkpoint wan_state {restored_checkpoint.wan_state.keys()}")
-    max_logging.log(f"optimizer found in checkpoint {'opt_state' in restored_checkpoint.wan_state.keys()}")
-    max_logging.log(f"optimizer state saved in attribute self.opt_state {self.opt_state}")
     return restored_checkpoint, step
 
   def load_diffusers_checkpoint(self):
@@ -106,8 +113,7 @@ class WanCheckpointer(ABC):
     if restored_checkpoint:
       max_logging.log("Loading WAN pipeline from checkpoint")
       pipeline = WanPipeline.from_checkpoint(self.config, restored_checkpoint)
-      if "opt_state" in restored_checkpoint["wan_state"].keys():
-        opt_state = restored_checkpoint["wan_state"]["opt_state"]
+      opt_state = restored_checkpoint.get("optimizer_state")
     else:
       max_logging.log("No checkpoint found, loading default pipeline.")
       pipeline = self.load_diffusers_checkpoint()
@@ -132,6 +138,9 @@ class WanCheckpointer(ABC):
     if "high_noise_transformer" in train_states:
         high_noise_state = train_states["high_noise_transformer"]
         items["high_noise_transformer_state"] = ocp.args.PyTreeSave(high_noise_state)
+
+    if "opt_state" in train_states:
+        items["optimizer_state"] = ocp.args.PyTreeSave(train_states["opt_state"])
 
     # Save the checkpoint
     if len(items) > 1:
