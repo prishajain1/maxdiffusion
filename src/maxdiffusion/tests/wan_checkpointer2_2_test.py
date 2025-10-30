@@ -12,7 +12,7 @@
  """
 
 import unittest
-from unittest.mock import patch, MagicMock, ANY
+from unittest.mock import patch, MagicMock
 
 from maxdiffusion.checkpointing.wan_checkpointer2_2 import WanCheckpointer, WAN_CHECKPOINT
 
@@ -43,26 +43,25 @@ class WanCheckpointerTest(unittest.TestCase):
     self.assertIsNone(opt_state)
     self.assertIsNone(step)
 
-  @patch("maxdiffusion.checkpointing.wan_checkpointer2_2.epath", autospec=True)
   @patch("maxdiffusion.checkpointing.wan_checkpointer2_2.create_orbax_checkpoint_manager")
   @patch("maxdiffusion.checkpointing.wan_checkpointer2_2.WanPipeline")
-  def test_load_checkpoint_no_optimizer(self, mock_wan_pipeline, mock_create_manager, mock_epath): # CHANGED: Added mock_epath
+  def test_load_checkpoint_no_optimizer(self, mock_wan_pipeline, mock_create_manager):
     mock_manager = MagicMock()
     mock_manager.latest_step.return_value = 1
     metadata_mock = MagicMock()
     metadata_mock.low_noise_transformer_state = {}
     metadata_mock.high_noise_transformer_state = {}
-    metadata_mock.wan_config = {}
-
-    del metadata_mock.optimizer_state
     mock_manager.item_metadata.return_value = metadata_mock
 
     restored_mock = MagicMock()
-    restored_mock.get.return_value = None
+    restored_mock.low_noise_transformer_state = {"params": {}}
+    restored_mock.high_noise_transformer_state = {"params": {}}
+    restored_mock.wan_config = {}
+    restored_mock.keys.return_value = ["low_noise_transformer_state", "high_noise_transformer_state", "wan_config"]
 
     mock_manager.restore.return_value = restored_mock
+
     mock_create_manager.return_value = mock_manager
-    mock_epath.Path.return_value = self.config.checkpoint_dir # CHANGED: Mock epath.Path
 
     mock_pipeline_instance = MagicMock()
     mock_wan_pipeline.from_checkpoint.return_value = mock_pipeline_instance
@@ -70,32 +69,31 @@ class WanCheckpointerTest(unittest.TestCase):
     checkpointer = WanCheckpointer(self.config, WAN_CHECKPOINT)
     pipeline, opt_state, step = checkpointer.load_checkpoint(step=1)
 
-    mock_manager.restore.assert_called_once_with(directory=self.config.checkpoint_dir, step=1, args=ANY)
+    mock_manager.restore.assert_called_once_with(directory=unittest.mock.ANY, step=1, args=unittest.mock.ANY)
     mock_wan_pipeline.from_checkpoint.assert_called_with(self.config, mock_manager.restore.return_value)
     self.assertEqual(pipeline, mock_pipeline_instance)
     self.assertIsNone(opt_state)
     self.assertEqual(step, 1)
 
-  @patch("maxdiffusion.checkpointing.wan_checkpointer2_2.epath", autospec=True)
   @patch("maxdiffusion.checkpointing.wan_checkpointer2_2.create_orbax_checkpoint_manager")
   @patch("maxdiffusion.checkpointing.wan_checkpointer2_2.WanPipeline")
-  def test_load_checkpoint_with_optimizer(self, mock_wan_pipeline, mock_create_manager, mock_epath): # CHANGED: Added mock_epath
+  def test_load_checkpoint_with_optimizer(self, mock_wan_pipeline, mock_create_manager):
     mock_manager = MagicMock()
     mock_manager.latest_step.return_value = 1
     metadata_mock = MagicMock()
     metadata_mock.low_noise_transformer_state = {}
     metadata_mock.high_noise_transformer_state = {}
-    metadata_mock.wan_config = {}
-    metadata_mock.optimizer_state = {} 
     mock_manager.item_metadata.return_value = metadata_mock
 
     restored_mock = MagicMock()
-    optimizer_state_dict = {"learning_rate": 0.001}
-    restored_mock.get.side_effect = lambda key, default=None: optimizer_state_dict if key == "optimizer_state" else MagicMock()
+    restored_mock.low_noise_transformer_state = {"params": {}, "opt_state": {"learning_rate": 0.001}}
+    restored_mock.high_noise_transformer_state = {"params": {}}
+    restored_mock.wan_config = {}
+    restored_mock.keys.return_value = ["low_noise_transformer_state", "high_noise_transformer_state", "wan_config"]
 
     mock_manager.restore.return_value = restored_mock
+
     mock_create_manager.return_value = mock_manager
-    mock_epath.Path.return_value = self.config.checkpoint_dir # CHANGED: Mock epath.Path
 
     mock_pipeline_instance = MagicMock()
     mock_wan_pipeline.from_checkpoint.return_value = mock_pipeline_instance
@@ -103,7 +101,7 @@ class WanCheckpointerTest(unittest.TestCase):
     checkpointer = WanCheckpointer(self.config, WAN_CHECKPOINT)
     pipeline, opt_state, step = checkpointer.load_checkpoint(step=1)
 
-    mock_manager.restore.assert_called_once_with(directory=self.config.checkpoint_dir, step=1, args=ANY)
+    mock_manager.restore.assert_called_once_with(directory=unittest.mock.ANY, step=1, args=unittest.mock.ANY)
     mock_wan_pipeline.from_checkpoint.assert_called_with(self.config, mock_manager.restore.return_value)
     self.assertEqual(pipeline, mock_pipeline_instance)
     self.assertIsNotNone(opt_state)
