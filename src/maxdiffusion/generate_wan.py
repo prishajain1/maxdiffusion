@@ -16,8 +16,6 @@ from typing import Sequence
 import jax
 import time
 import os
-from maxdiffusion.pipelines.wan.wan_pipeline import WanPipeline as WanPipeline2_1
-from maxdiffusion.pipelines.wan.wan_pipeline2_2 import WanPipeline as WanPipeline2_2
 from maxdiffusion import pyconfig, max_logging, max_utils
 from absl import app
 import importlib
@@ -139,7 +137,7 @@ def run(config, pipeline=None, filename_prefix=""):
   WanCheckpointer = checkpointer_lib.WanCheckpointer
 
   checkpoint_loader = WanCheckpointer(config, "WAN_CHECKPOINT")
-  pipeline, _, _ = checkpoint_loader.load_checkpoint() 
+  pipeline, _, _ = checkpoint_loader.load_checkpoint()
 
   if pipeline is None:
     pipeline_lib = get_pipeline(model_key)
