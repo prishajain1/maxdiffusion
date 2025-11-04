@@ -20,6 +20,7 @@ from maxdiffusion.pipelines.wan.wan_pipeline import WanPipeline as WanPipeline2_
 from maxdiffusion.pipelines.wan.wan_pipeline2_2 import WanPipeline as WanPipeline2_2
 from maxdiffusion import pyconfig, max_logging, max_utils
 from absl import app
+import importlib
 from maxdiffusion.utils import export_to_video
 from google.cloud import storage
 import flax
