@@ -18,26 +18,12 @@ import time
 import os
 from maxdiffusion.pipelines.wan.wan_pipeline import WanPipeline as WanPipeline2_1
 from maxdiffusion.pipelines.wan.wan_pipeline2_2 import WanPipeline as WanPipeline2_2
-from functools import partial
 from maxdiffusion import pyconfig, max_logging, max_utils
 from absl import app
-from absl import flags
 from maxdiffusion.utils import export_to_video
 from google.cloud import storage
 import flax
 
-_MODEL_NAME = flags.DEFINE_enum(
-    "model_name",
-    default="wan2.1",
-    enum_values=["wan2.1", "wan2.2"],
-    help="The model version to run (wan2.1 or wan2.2). This determines the base config file.",
-)
-
-CONFIG_BASE_DIR = "src/maxdiffusion/configs"
-MODEL_CONFIG_MAP = {
-    "wan2.1": "base_wan_14b.yml",
-    "wan2.2": "base_wan_27b.yml",
-}
 
 def upload_video_to_gcs(output_dir: str, video_path: str):
   """
@@ -78,18 +64,26 @@ def delete_file(file_path: str):
 
 jax.config.update("jax_use_shardy_partitioner", True)
 
+def get_pipeline(model_name: str):
+  if model_name == "wan2.1":
+    return importlib.import_module("maxdiffusion.pipelines.wan.wan_pipeline")
+  elif model_name == "wan2.2":
+    return importlib.import_module("maxdiffusion.pipelines.wan.wan_pipeline2_2")
+  else:
+    raise ValueError(f"Unsupported model_name in config: {model_name}")
 
-def inference_generate_video(config, pipeline, filename_prefix=""):
-  s0 = time.perf_counter()
-  prompt = [config.prompt] * config.global_batch_size_to_train_on
-  negative_prompt = [config.negative_prompt] * config.global_batch_size_to_train_on
+def get_checkpointer(model_name: str):
+  if model_name == "wan2.1":
+    return importlib.import_module("maxdiffusion.checkpointing.wan_checkpointer")
+  elif model_name == "wan2.2":
+    return importlib.import_module("maxdiffusion.checkpointing.wan_checkpointer2_2")
+  else:
+    raise ValueError(f"Unsupported model_name in config: {model_name}")
 
-  max_logging.log(
-      f"Num steps: {config.num_inference_steps}, height: {config.height}, width: {config.width}, frames: {config.num_frames}, video: {filename_prefix}"
-  )
-  model_key = _MODEL_NAME.value
+def call_pipeline(config, pipeline, prompt, negative_prompt):
+  model_key = config.model_name
   if model_key == "wan2.1":
-    videos = pipeline(
+    return pipeline(
         prompt=prompt,
         negative_prompt=negative_prompt,
         height=config.height,
@@ -99,7 +93,7 @@ def inference_generate_video(config, pipeline, filename_prefix=""):
         guidance_scale=config.guidance_scale,
     )
   elif model_key == "wan2.2":
-    videos = pipeline(
+    return pipeline(
         prompt=prompt,
         negative_prompt=negative_prompt,
         height=config.height,
@@ -110,6 +104,20 @@ def inference_generate_video(config, pipeline, filename_prefix=""):
         guidance_scale_high=config.guidance_scale_high,
         boundary=config.boundary_timestep,
     )
+  else:
+    raise ValueError(f"Unsupported model_name in config: {model_key}")
+
+
+def inference_generate_video(config, pipeline, filename_prefix=""):
+  s0 = time.perf_counter()
+  prompt = [config.prompt] * config.global_batch_size_to_train_on
+  negative_prompt = [config.negative_prompt] * config.global_batch_size_to_train_on
+
+  max_logging.log(
+      f"Num steps: {config.num_inference_steps}, height: {config.height}, width: {config.width}, frames: {config.num_frames}, video: {filename_prefix}"
+  )
+
+  videos = call_pipeline(config, pipeline, prompt, negative_prompt)
 
   max_logging.log(f"video {filename_prefix}, compile time: {(time.perf_counter() - s0)}")
   for i in range(len(videos)):
@@ -124,51 +132,29 @@ def inference_generate_video(config, pipeline, filename_prefix=""):
 
 def run(config, pipeline=None, filename_prefix=""):
   print("seed: ", config.seed)
-  model_key = _MODEL_NAME.value
+  model_key = config.model_name
 
-  if model_key == "wan2.1":
-    from maxdiffusion.checkpointing.wan_checkpointer import WanCheckpointer
-  elif model_key == "wan2.2":
-    from maxdiffusion.checkpointing.wan_checkpointer2_2 import WanCheckpointer
+  checkpointer_lib = get_checkpointer(model_key)
+  WanCheckpointer = checkpointer_lib.WanCheckpointer
 
   checkpoint_loader = WanCheckpointer(config, "WAN_CHECKPOINT")
-  pipeline, opt_state, step = checkpoint_loader.load_checkpoint()
+  pipeline, _, _ = checkpoint_loader.load_checkpoint() 
+
   if pipeline is None:
-    if model_key == "wan2.1":
-      pipeline = WanPipeline2_1.from_pretrained(config)
-    elif model_key == "wan2.2":
-      pipeline = WanPipeline2_2.from_pretrained(config)
+    pipeline_lib = get_pipeline(model_key)
+    WanPipeline = pipeline_lib.WanPipeline
+    pipeline = WanPipeline.from_pretrained(config)
   s0 = time.perf_counter()
 
   # Using global_batch_size_to_train_on so not to create more config variables
   prompt = [config.prompt] * config.global_batch_size_to_train_on
   negative_prompt = [config.negative_prompt] * config.global_batch_size_to_train_on
-  
+
   max_logging.log(
       f"Num steps: {config.num_inference_steps}, height: {config.height}, width: {config.width}, frames: {config.num_frames}"
   )
-  if model_key == "wan2.1":
-    videos = pipeline(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        height=config.height,
-        width=config.width,
-        num_frames=config.num_frames,
-        num_inference_steps=config.num_inference_steps,
-        guidance_scale=config.guidance_scale,
-    )
-  elif model_key == "wan2.2":
-    videos = pipeline(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        height=config.height,
-        width=config.width,
-        num_frames=config.num_frames,
-        num_inference_steps=config.num_inference_steps,
-        guidance_scale_low=config.guidance_scale_low,
-        guidance_scale_high=config.guidance_scale_high,
-        boundary=config.boundary_timestep,
-    )
+
+  videos = call_pipeline(config, pipeline, prompt, negative_prompt)
 
   print("compile time: ", (time.perf_counter() - s0))
   saved_video_path = []
@@ -180,75 +166,20 @@ def run(config, pipeline=None, filename_prefix=""):
       upload_video_to_gcs(os.path.join(config.output_dir, config.run_name), video_path)
 
   s0 = time.perf_counter()
-  if model_key == "wan2.1":
-    videos = pipeline(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        height=config.height,
-        width=config.width,
-        num_frames=config.num_frames,
-        num_inference_steps=config.num_inference_steps,
-        guidance_scale=config.guidance_scale,
-    )
-  elif model_key == "wan2.2":
-    videos = pipeline(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        height=config.height,
-        width=config.width,
-        num_frames=config.num_frames,
-        num_inference_steps=config.num_inference_steps,
-        guidance_scale_low=config.guidance_scale_low,
-        guidance_scale_high=config.guidance_scale_high,
-        boundary=config.boundary_timestep,
-    )
+  videos = call_pipeline(config, pipeline, prompt, negative_prompt)
   print("generation time: ", (time.perf_counter() - s0))
 
   s0 = time.perf_counter()
   if config.enable_profiler:
     max_utils.activate_profiler(config)
-    if model_key == "wan2.1":
-      videos = pipeline(
-          prompt=prompt,
-          negative_prompt=negative_prompt,
-          height=config.height,
-          width=config.width,
-          num_frames=config.num_frames,
-          num_inference_steps=config.num_inference_steps,
-          guidance_scale=config.guidance_scale,
-      )
-    elif model_key == "wan2.2":
-      videos = pipeline(
-          prompt=prompt,
-          negative_prompt=negative_prompt,
-          height=config.height,
-          width=config.width,
-          num_frames=config.num_frames,
-          num_inference_steps=config.num_inference_steps,
-          guidance_scale_low=config.guidance_scale_low,
-          guidance_scale_high=config.guidance_scale_high,
-          boundary=config.boundary_timestep,
-      )
+    videos = call_pipeline(config, pipeline, prompt, negative_prompt)
     max_utils.deactivate_profiler(config)
     print("generation time: ", (time.perf_counter() - s0))
   return saved_video_path
 
 
 def main(argv: Sequence[str]) -> None:
-  # Get the model name from the flag
-  model_key = _MODEL_NAME.value
-  config_filename = MODEL_CONFIG_MAP[model_key]
-  selected_yaml_path = os.path.join(CONFIG_BASE_DIR, config_filename)
-
-  max_logging.log(f"Using model: {model_key}, loading base config: {selected_yaml_path}")
-
-  # Construct argv for pyconfig.initialize
-  # argv[0] is the program name.
-  # Insert the selected YAML path at index 1.
-  # The rest of argv (argv[1:]) are the overrides.
-  argv_for_pyconfig = list(argv[:1]) + [selected_yaml_path] + list(argv[1:])
-
-  pyconfig.initialize(argv_for_pyconfig)
+  pyconfig.initialize(argv)
   flax.config.update("flax_always_shard_variable", False)
   run(pyconfig.config)
 
