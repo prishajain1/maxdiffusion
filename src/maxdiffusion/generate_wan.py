@@ -23,6 +23,7 @@ from absl import app
 from maxdiffusion.utils import export_to_video
 from google.cloud import storage
 import flax
+import tensorflow as tf
 
 
 def upload_video_to_gcs(output_dir: str, video_path: str):
@@ -143,14 +144,42 @@ def run(config, pipeline=None, filename_prefix=""):
 
   s0 = time.perf_counter()
   videos = call_pipeline(config, pipeline, prompt, negative_prompt)
-  print("generation time: ", (time.perf_counter() - s0))
+  generation_time = time.perf_counter() - s0
+  print("generation time: ", generation_time)
+
+  if config.output_dir.startswith("gs://"):
+    metrics_log_dir = os.path.join(config.output_dir, config.run_name, "metrics")
+    try:
+      writer = tf.summary.create_file_writer(metrics_log_dir)
+      with writer.as_default():
+        tf.summary.scalar("inference/generation_time", generation_time, step=1)
+      writer.flush()
+      writer.close()
+      max_logging.log(f"Wrote TF event for generation time to {metrics_log_dir}")
+    except Exception as e:
+      max_logging.log(f"Error writing TF event to GCS: {e}")
+
 
   s0 = time.perf_counter()
   if config.enable_profiler:
     max_utils.activate_profiler(config)
     videos = call_pipeline(config, pipeline, prompt, negative_prompt)
     max_utils.deactivate_profiler(config)
-    print("generation time: ", (time.perf_counter() - s0))
+    generation_time_with_profiler = time.perf_counter() - s0
+    print("generation time: ", generation_time_with_profiler)
+
+    if config.output_dir.startswith("gs://"):
+      metrics_log_dir = os.path.join(config.output_dir, config.run_name, "metrics")
+      try:
+        writer = tf.summary.create_file_writer(metrics_log_dir)
+        with writer.as_default():
+          tf.summary.scalar("inference/generation_time_with_profiler", generation_time_with_profiler, step=1)
+        writer.flush()
+        writer.close()
+        max_logging.log(f"Wrote TF event for profiler generation time to {metrics_log_dir}")
+      except Exception as e:
+        max_logging.log(f"Error writing TF event to GCS: {e}")
+
   return saved_video_path
 
 
