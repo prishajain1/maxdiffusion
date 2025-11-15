@@ -117,7 +117,8 @@ def inference_generate_video(config, pipeline, filename_prefix=""):
 def run(config, pipeline=None, filename_prefix=""):
   print("seed: ", config.seed)
 
-  if not config.get("tensorboard_dir"):
+    # Default tensorboard_dir to output_dir/tensorboard if not explicitly set
+  if not hasattr(config, "tensorboard_dir") or not config.tensorboard_dir:
     config.tensorboard_dir = os.path.join(config.output_dir, "tensorboard")
 
   # Initialize TensorBoard writer
