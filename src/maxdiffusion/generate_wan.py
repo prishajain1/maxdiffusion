@@ -117,8 +117,14 @@ def inference_generate_video(config, pipeline, filename_prefix=""):
 def run(config, pipeline=None, filename_prefix=""):
   print("seed: ", config.seed)
 
+  if not config.get("tensorboard_dir"):
+    config.tensorboard_dir = os.path.join(config.output_dir, "tensorboard")
+
   # Initialize TensorBoard writer
   writer = max_utils.initialize_summary_writer(config)
+  if jax.process_index() == 0 and writer:
+    max_logging.log(f"TensorBoard logs will be written to: {config.tensorboard_dir}")
+
 
   model_key = config.model_name
   checkpoint_loader = WanCheckpointer(model_key=model_key, config=config)
