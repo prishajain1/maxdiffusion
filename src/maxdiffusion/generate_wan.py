@@ -23,7 +23,6 @@ from absl import app
 from maxdiffusion.utils import export_to_video
 from google.cloud import storage
 import flax
-import tensorflow as tf
 
 
 def upload_video_to_gcs(output_dir: str, video_path: str):
@@ -117,6 +116,10 @@ def inference_generate_video(config, pipeline, filename_prefix=""):
 
 def run(config, pipeline=None, filename_prefix=""):
   print("seed: ", config.seed)
+
+  # Initialize TensorBoard writer
+  writer = max_utils.initialize_summary_writer(config)
+
   model_key = config.model_name
   checkpoint_loader = WanCheckpointer(model_key=model_key, config=config)
   pipeline, _, _ = checkpoint_loader.load_checkpoint()
@@ -146,39 +149,21 @@ def run(config, pipeline=None, filename_prefix=""):
   videos = call_pipeline(config, pipeline, prompt, negative_prompt)
   generation_time = time.perf_counter() - s0
   print("generation time: ", generation_time)
+  if writer and jax.process_index() == 0:
+    writer.add_scalar("inference/generation_time", generation_time, global_step=0)
 
-  if config.output_dir.startswith("gs://"):
-    metrics_log_dir = os.path.join(config.output_dir, config.run_name, "metrics")
-    try:
-      writer = tf.summary.create_file_writer(metrics_log_dir)
-      with writer.as_default():
-        tf.summary.scalar("inference/generation_time", generation_time, step=1)
-      writer.flush()
-      writer.close()
-      max_logging.log(f"Wrote TF event for generation time to {metrics_log_dir}")
-    except Exception as e:
-      max_logging.log(f"Error writing TF event to GCS: {e}")
-
-
-  s0 = time.perf_counter()
   if config.enable_profiler:
+    s0 = time.perf_counter()
     max_utils.activate_profiler(config)
     videos = call_pipeline(config, pipeline, prompt, negative_prompt)
     max_utils.deactivate_profiler(config)
     generation_time_with_profiler = time.perf_counter() - s0
-    print("generation time: ", generation_time_with_profiler)
+    print("generation time with profiler: ", generation_time_with_profiler)
+    if writer and jax.process_index() == 0:
+      writer.add_scalar("inference/generation_time_with_profiler", generation_time_with_profiler, global_step=0)
 
-    if config.output_dir.startswith("gs://"):
-      metrics_log_dir = os.path.join(config.output_dir, config.run_name, "metrics")
-      try:
-        writer = tf.summary.create_file_writer(metrics_log_dir)
-        with writer.as_default():
-          tf.summary.scalar("inference/generation_time_with_profiler", generation_time_with_profiler, step=1)
-        writer.flush()
-        writer.close()
-        max_logging.log(f"Wrote TF event for profiler generation time to {metrics_log_dir}")
-      except Exception as e:
-        max_logging.log(f"Error writing TF event to GCS: {e}")
+  if writer:
+    max_utils.close_summary_writer(writer)
 
   return saved_video_path
 
