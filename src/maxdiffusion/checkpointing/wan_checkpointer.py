@@ -19,7 +19,7 @@ import json
 
 import jax
 import numpy as np
-from typing import Optional, Tuple, Type
+from typing import Optional, Tuple, Type, Union
 from maxdiffusion.checkpointing.checkpointing_utils import (create_orbax_checkpoint_manager)
 from ..pipelines.wan.wan_pipeline import WanPipeline2_1, WanPipeline2_2
 from .. import max_logging, max_utils
@@ -31,21 +31,9 @@ WAN_CHECKPOINT = "WAN_CHECKPOINT"
 
 
 class WanCheckpointer(ABC):
-  _SUBCLASS_MAP: dict[str, Type['WanCheckpointer']] = {}
-
-  def __new__(cls, model_key: str, config, checkpoint_type: str = WAN_CHECKPOINT):
-    if cls is WanCheckpointer:
-      subclass = cls._SUBCLASS_MAP.get(model_key)
-      if subclass is None:
-          raise ValueError(
-              f"Unknown model_key: '{model_key}'. "
-              f"Supported keys are: {list(cls._SUBCLASS_MAP.keys())}"
-          )
-      return super().__new__(subclass)
-    else:
-      return super().__new__(cls)
 
   def __init__(self, model_key, config, checkpoint_type: str = WAN_CHECKPOINT):
+    self.model_key = model_key
     self.config = config
     self.checkpoint_type = checkpoint_type
     self.opt_state = None
@@ -243,9 +231,6 @@ class WanCheckpointer2_2(WanCheckpointer):
     # Save the checkpoint
     self.checkpoint_manager.save(train_step, args=ocp.args.Composite(**items))
     max_logging.log(f"Checkpoint for step {train_step} saved.")
-
-WanCheckpointer._SUBCLASS_MAP["wan2.1"] = WanCheckpointer2_1
-WanCheckpointer._SUBCLASS_MAP["wan2.2"] = WanCheckpointer2_2
 
 def save_checkpoint_orig(self, train_step, pipeline, train_states: dict):
   """Saves the training state and model configurations."""
