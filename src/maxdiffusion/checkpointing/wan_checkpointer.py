@@ -19,7 +19,7 @@ import json
 
 import jax
 import numpy as np
-from typing import Optional, Tuple, Type, Union
+from typing import Optional, Tuple, Type
 from maxdiffusion.checkpointing.checkpointing_utils import (create_orbax_checkpoint_manager)
 from ..pipelines.wan.wan_pipeline import WanPipeline2_1, WanPipeline2_2
 from .. import max_logging, max_utils
@@ -32,8 +32,7 @@ WAN_CHECKPOINT = "WAN_CHECKPOINT"
 
 class WanCheckpointer(ABC):
 
-  def __init__(self, model_key, config, checkpoint_type: str = WAN_CHECKPOINT):
-    self.model_key = model_key
+  def __init__(self, config, checkpoint_type: str = WAN_CHECKPOINT):
     self.config = config
     self.checkpoint_type = checkpoint_type
     self.opt_state = None

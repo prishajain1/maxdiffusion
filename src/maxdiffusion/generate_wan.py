@@ -130,9 +130,9 @@ def run(config, pipeline=None, filename_prefix=""):
 
   if pipeline is None:
     if model_key == "wan2.1":
-      checkpoint_loader = WanCheckpointer2_1(model_key=model_key, config=config)
+      checkpoint_loader = WanCheckpointer2_1(config=config)
     elif model_key == "wan2.2":
-      checkpoint_loader = WanCheckpointer2_2(model_key=model_key, config=config)
+      checkpoint_loader = WanCheckpointer2_2(config=config)
     else:
       raise ValueError(f"Unsupported model_name for checkpointer: {model_key}")
     pipeline, _, _ = checkpoint_loader.load_checkpoint()
