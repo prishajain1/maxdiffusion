@@ -139,10 +139,11 @@ def run(config, pipeline=None, filename_prefix=""):
   writer = max_utils.initialize_summary_writer(config)
   if jax.process_index() == 0 and writer:
     max_logging.log(f"TensorBoard logs will be written to: {config.tensorboard_dir}")
-    github_sha = os.environ.get('GITHUB_SHA')
-    if github_sha:
-      writer.add_text("inference/git_commit_hash", github_sha, global_step=0)
-      max_logging.log(f"Git Commit Hash (from GITHUB_SHA): {github_sha}")
+    
+    commit_hash = get_git_commit_hash()
+    if commit_hash:
+      writer.add_text("inference/git_commit_hash", commit_hash, global_step=0)
+      max_logging.log(f"Git Commit Hash: {commit_hash}")
     else:
       max_logging.log("Could not retrieve Git commit hash.")
 
