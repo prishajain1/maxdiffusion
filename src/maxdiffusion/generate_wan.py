@@ -128,6 +128,19 @@ def run(config, pipeline=None, filename_prefix=""):
   if jax.process_index() == 0 and writer:
     max_logging.log(f"TensorBoard logs will be written to: {config.tensorboard_dir}")
 
+    commit_hash = get_git_commit_hash()
+    if commit_hash:
+      writer.add_text("inference/git_commit_hash", commit_hash, global_step=0)
+      max_logging.log(f"Git Commit Hash: {commit_hash}")
+    else:
+      # Fallback for CI environments like GitHub Actions
+      github_sha = os.environ.get('GITHUB_SHA')
+      if github_sha:
+        writer.add_text("inference/git_commit_hash", github_sha, global_step=0)
+        max_logging.log(f"Git Commit Hash (from GITHUB_SHA): {github_sha}")
+      else:
+        max_logging.log("Could not retrieve Git commit hash.")
+
   if pipeline is None:
     if model_key == "wan2.1":
       checkpoint_loader = WanCheckpointer2_1(config=config)
