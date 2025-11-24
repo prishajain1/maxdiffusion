@@ -16,6 +16,7 @@ from typing import Sequence
 import jax
 import time
 import os
+import subprocess
 from maxdiffusion.checkpointing.wan_checkpointer import WanCheckpointer2_1, WanCheckpointer2_2
 from maxdiffusion import pyconfig, max_logging, max_utils
 from absl import app
