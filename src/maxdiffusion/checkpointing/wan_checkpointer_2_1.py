@@ -3,7 +3,7 @@ import json
 import jax
 import numpy as np
 from typing import Optional, Tuple
-from src.maxdiffusion.checkpointing.wan_checkpointer import WanCheckpointer
+from checkpointing.wan_checkpointer import WanCheckpointer
 from ..pipelines.wan.wan_pipeline import WanPipeline2_1
 from .. import max_logging
 import orbax.checkpoint as ocp
